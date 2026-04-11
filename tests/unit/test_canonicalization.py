@@ -82,6 +82,11 @@ class TestToCanonical:
         dep = DependencyReference.parse("https://gitlab.com/acme/standards.git")
         assert dep.to_canonical() == "gitlab.com/acme/standards"
 
+    def test_http_generic_host_preserved(self):
+        """Explicit http:// on a generic host is preserved on write."""
+        dep = DependencyReference.parse("http://git.company.internal/acme/standards.git")
+        assert dep.to_canonical() == "http://git.company.internal/acme/standards"
+
     def test_ssh_gitlab(self):
         """SSH GitLab URL normalizes to host/owner/repo."""
         dep = DependencyReference.parse("git@gitlab.com:acme/standards.git")
@@ -173,6 +178,16 @@ class TestGetIdentity:
         dep = DependencyReference.parse("https://gitlab.com/owner/repo.git")
         assert dep.get_identity() == "gitlab.com/owner/repo"
 
+    def test_http_generic_host_identity_matches_https_form(self):
+        """Identity ignores transport so http and https forms match the same repo."""
+        http_dep = DependencyReference.parse(
+            "http://git.company.internal/owner/repo.git"
+        )
+        https_dep = DependencyReference.parse(
+            "https://git.company.internal/owner/repo.git"
+        )
+        assert http_dep.get_identity() == https_dep.get_identity()
+
     def test_ssh_github(self):
         """SSH default host stripped."""
         dep = DependencyReference.parse("git@github.com:owner/repo.git")
@@ -233,6 +248,14 @@ class TestCanonicalize:
 
     def test_https_gitlab_with_ref(self):
         assert DependencyReference.canonicalize("https://gitlab.com/o/r.git#main") == "gitlab.com/o/r#main"
+
+    def test_http_generic_host(self):
+        assert (
+            DependencyReference.canonicalize(
+                "http://git.company.internal/o/r.git"
+            )
+            == "http://git.company.internal/o/r"
+        )
 
 
 # ── backward compat: get_canonical_dependency_string() ──────────────────────
@@ -327,6 +350,28 @@ class TestNormalizeOnWrite:
         assert validated == ["gitlab.com/acme/standards"]
         data = yaml.safe_load(apm_yml.read_text())
         assert "gitlab.com/acme/standards" in data["dependencies"]["apm"]
+
+    @patch("apm_cli.commands.install._validate_package_exists", return_value=True)
+    @patch("apm_cli.commands.install._rich_success")
+    def test_http_generic_url_preserved(self, mock_success, mock_validate, tmp_path, monkeypatch):
+        """Explicit http:// generic URLs stay explicit in apm.yml."""
+        import yaml
+
+        apm_yml = tmp_path / "apm.yml"
+        apm_yml.write_text(
+            yaml.dump({"name": "test", "version": "0.1.0", "dependencies": {"apm": []}})
+        )
+        monkeypatch.chdir(tmp_path)
+
+        from apm_cli.commands.install import _validate_and_add_packages_to_apm_yml
+
+        validated, _outcome = _validate_and_add_packages_to_apm_yml(
+            ["http://git.company.internal/acme/standards.git"]
+        )
+
+        assert validated == ["http://git.company.internal/acme/standards"]
+        data = yaml.safe_load(apm_yml.read_text())
+        assert "http://git.company.internal/acme/standards" in data["dependencies"]["apm"]
 
     @patch("apm_cli.commands.install._validate_package_exists", return_value=True)
     def test_duplicate_detection_different_forms(self, mock_validate, tmp_path, monkeypatch):

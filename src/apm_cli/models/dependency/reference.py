@@ -32,6 +32,9 @@ class DependencyReference:
     host: Optional[str] = (
         None  # Optional host (github.com, dev.azure.com, or enterprise host)
     )
+    scheme: Optional[str] = (
+        None  # Explicit remote scheme from full URL inputs (http, https, ssh)
+    )
     reference: Optional[str] = None  # e.g., "main", "v1.0.0", "abc123"
     alias: Optional[str] = None  # Optional alias for the dependency
     virtual_path: Optional[str] = (
@@ -73,6 +76,26 @@ class DependencyReference:
         from ...utils.github_host import is_azure_devops_hostname
 
         return self.host is not None and is_azure_devops_hostname(self.host)
+
+    def uses_insecure_http(self) -> bool:
+        """Return True when this dependency should keep an explicit http transport."""
+        if self.scheme != "http" or self.is_local:
+            return False
+
+        host = self.host or default_host()
+        configured_default = default_host()
+
+        if self.is_azure_devops():
+            return False
+        if is_github_hostname(host):
+            return False
+        if host.lower() == configured_default.lower() and configured_default.lower() != "github.com":
+            return False
+        return True
+
+    def get_clone_scheme(self) -> str:
+        """Return the preferred scheme for clone and source URLs."""
+        return "http" if self.uses_insecure_http() else "https"
 
     @property
     def virtual_type(self) -> "Optional[VirtualPackageType]":
@@ -195,11 +218,13 @@ class DependencyReference:
         Follows the Docker-style default-registry convention:
         - Default host (github.com) is stripped  ->  owner/repo
         - Non-default hosts are preserved         ->  gitlab.com/owner/repo
+        - Explicit http:// is preserved for generic repo-level URLs
         - Virtual paths are appended              ->  owner/repo/path/to/thing
         - Refs are appended with #                ->  owner/repo#v1.0
         - Local paths are returned as-is          ->  ./packages/my-pkg
 
-        No .git suffix, no https://, no git@  -- just the canonical identifier.
+        No .git suffix, no https://, no git@ -- except explicit generic
+        http:// URLs, which are preserved so the required transport survives.
 
         Returns:
             str: Canonical dependency string
@@ -210,8 +235,15 @@ class DependencyReference:
         host = self.host or default_host()
         is_default = host.lower() == default_host().lower()
 
+        # Preserve explicit http:// for generic repo-level dependencies so the
+        # saved manifest keeps the required transport for future installs.
+        if self.uses_insecure_http() and not self.is_virtual:
+            if self.artifactory_prefix:
+                result = f"http://{host}/{self.artifactory_prefix}/{self.repo_url}"
+            else:
+                result = f"http://{host}/{self.repo_url}"
         # Start with optional host prefix
-        if is_default and not self.artifactory_prefix:
+        elif is_default and not self.artifactory_prefix:
             result = self.repo_url
         elif self.artifactory_prefix:
             result = f"{host}/{self.artifactory_prefix}/{self.repo_url}"
@@ -904,6 +936,14 @@ class DependencyReference:
                 )
             )
 
+        scheme = None
+        if dependency_str.startswith("http://"):
+            scheme = "http"
+        elif dependency_str.startswith("https://"):
+            scheme = "https"
+        elif dependency_str.startswith("ssh://") or dependency_str.startswith("git@"):
+            scheme = "ssh"
+
         dependency_str = cls._normalize_ssh_protocol_url(dependency_str)
 
         # Phase 1: detect virtual packages
@@ -978,6 +1018,7 @@ class DependencyReference:
         return cls(
             repo_url=repo_url,
             host=host,
+            scheme=scheme,
             reference=reference,
             alias=alias,
             virtual_path=virtual_path,
@@ -993,12 +1034,14 @@ class DependencyReference:
 
         For Azure DevOps, generates: https://dev.azure.com/org/project/_git/repo
         For GitHub, generates: https://github.com/owner/repo
+        For explicit generic http URLs, preserves http://
         For local packages, returns the local path.
         """
         if self.is_local and self.local_path:
             return self.local_path
 
         host = self.host or default_host()
+        scheme = self.get_clone_scheme()
 
         if self.is_azure_devops():
             # ADO format: https://dev.azure.com/org/project/_git/repo
@@ -1006,10 +1049,10 @@ class DependencyReference:
             repo = urllib.parse.quote(self.ado_repo, safe="")
             return f"https://{host}/{self.ado_organization}/{project}/_git/{repo}"
         elif self.artifactory_prefix:
-            return f"https://{host}/{self.artifactory_prefix}/{self.repo_url}"
+            return f"{scheme}://{host}/{self.artifactory_prefix}/{self.repo_url}"
         else:
-            # GitHub format: https://github.com/owner/repo
-            return f"https://{host}/{self.repo_url}"
+            # Generic or GitHub-style repository URL
+            return f"{scheme}://{host}/{self.repo_url}"
 
     def to_clone_url(self) -> str:
         """Convert to a clone-friendly URL (same as to_github_url for most purposes)."""
@@ -1029,7 +1072,12 @@ class DependencyReference:
         """String representation of the dependency reference."""
         if self.is_local and self.local_path:
             return self.local_path
-        if self.host:
+        if self.host and self.uses_insecure_http():
+            if self.artifactory_prefix:
+                result = f"http://{self.host}/{self.artifactory_prefix}/{self.repo_url}"
+            else:
+                result = f"http://{self.host}/{self.repo_url}"
+        elif self.host:
             if self.artifactory_prefix:
                 result = f"{self.host}/{self.artifactory_prefix}/{self.repo_url}"
             else:

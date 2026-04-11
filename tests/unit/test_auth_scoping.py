@@ -93,6 +93,13 @@ class TestBuildRepoUrlTokenScoping:
         url = dl._build_repo_url("team/rules", use_ssh=False, dep_ref=dep)
         assert "ghp_TESTTOKEN" not in url
 
+    def test_explicit_http_generic_host_preserved(self):
+        dl = _make_downloader(github_token="ghp_TESTTOKEN")
+        dep = _dep("http://git.company.internal/team/rules.git")
+        url = dl._build_repo_url("team/rules", use_ssh=False, dep_ref=dep)
+        assert url == "http://git.company.internal/team/rules"
+        assert "ghp_TESTTOKEN" not in url
+
     def test_ssh_url_never_embeds_token(self):
         dl = _make_downloader(github_token="ghp_TESTTOKEN")
         dep = _dep("git@gitlab.com:acme/rules.git")
@@ -543,6 +550,20 @@ class TestValidatePackageExistsEnv:
             "Generic host validation should not set GIT_CONFIG_NOSYSTEM=1"
         # GIT_TERMINAL_PROMPT should still be '0' (no interactive prompts)
         assert env_used.get("GIT_TERMINAL_PROMPT") == "0"
+
+    @patch("apm_cli.core.token_manager.GitHubTokenManager.resolve_credential_from_git", return_value=None)
+    @patch("subprocess.run")
+    @patch.dict(os.environ, {}, clear=True)
+    def test_generic_http_validation_preserves_http_url(self, mock_run, _mock_cred):
+        """Explicit http:// URLs must reach git ls-remote unchanged."""
+        from apm_cli.commands.install import _validate_package_exists
+
+        mock_run.return_value = Mock(returncode=0)
+        _validate_package_exists("http://git.company.internal/acme/rules.git")
+
+        assert mock_run.called
+        cmd = mock_run.call_args[0][0]
+        assert cmd[-1] == "http://git.company.internal/acme/rules"
 
     @patch("apm_cli.core.token_manager.GitHubTokenManager.resolve_credential_from_git", return_value=None)
     @patch("subprocess.run")

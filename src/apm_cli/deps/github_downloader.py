@@ -1,5 +1,4 @@
 """GitHub package downloader for APM dependencies."""
-
 import os
 import shutil
 import stat
@@ -42,6 +41,7 @@ from ..utils.github_host import (
     is_azure_devops_hostname,
     is_github_hostname
 )
+from ..utils.path_security import ensure_path_within
 
 
 def normalize_collection_path(virtual_path: str) -> str:
@@ -605,14 +605,17 @@ class GitHubPackageDownloader:
         else:
             # Determine if this host should receive a GitHub token
             is_github = is_github_hostname(host)
+            scheme = dep_ref.get_clone_scheme() if dep_ref else "https"
             if use_ssh:
                 return build_ssh_url(host, repo_ref)
             elif is_github and github_token:
                 # Only send GitHub tokens to GitHub hosts
-                return build_https_clone_url(host, repo_ref, token=github_token)
+                return build_https_clone_url(
+                    host, repo_ref, token=github_token, scheme="https"
+                )
             else:
-                # Generic hosts: plain HTTPS, let git credential helpers handle auth
-                return build_https_clone_url(host, repo_ref, token=None)
+                # Generic hosts: plain HTTP(S), let git credential helpers handle auth
+                return build_https_clone_url(host, repo_ref, token=None, scheme=scheme)
     
     def _clone_with_fallback(self, repo_url_base: str, target_path: Path, progress_reporter=None, dep_ref: DependencyReference = None, verbose_callback=None, **clone_kwargs) -> Repo:
         """Attempt to clone a repository with fallback authentication methods.
@@ -1322,7 +1325,7 @@ class GitHubPackageDownloader:
             raise RuntimeError(f"Network error downloading {file_path}: {e}")
     
     def validate_virtual_package_exists(self, dep_ref: DependencyReference) -> bool:
-        """Validate that a virtual package (file, collection, or subdirectory) exists on GitHub.
+        """Validate that a virtual package exists on the target git host.
         
         Supports:
         - Virtual files: owner/repo/path/file.prompt.md
@@ -1337,7 +1340,7 @@ class GitHubPackageDownloader:
         """
         if not dep_ref.is_virtual:
             raise ValueError("Can only validate virtual packages with this method")
-        
+
         ref = dep_ref.reference or "main"
         file_path = dep_ref.virtual_path
         

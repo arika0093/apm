@@ -1,5 +1,4 @@
 """Tests for GitHub package downloader."""
-
 import os
 import pytest
 import stat
@@ -1316,15 +1315,32 @@ class TestDownloaderCredentialFallback:
     """Test credential fallback behavior in GitHubPackageDownloader."""
 
     def test_credential_fill_used_when_no_env_token(self):
-        """When no env tokens are set, credential helpers should be used."""
+        """Constructor stays env-only; download paths resolve credential helpers lazily."""
         with patch.dict(os.environ, {}, clear=True), \
              patch(
                  'apm_cli.core.token_manager.GitHubTokenManager.resolve_credential_from_git',
                  return_value='credential-token'
-             ):
+             ) as mock_cred:
             downloader = GitHubPackageDownloader()
-            assert downloader.github_token == 'credential-token'
-            assert downloader._github_token_from_credential_fill is True
+            assert downloader.github_token is None
+            assert downloader._github_token_from_credential_fill is False
+            mock_cred.assert_not_called()
+
+            dep_ref = DependencyReference.parse('owner/repo')
+
+            mock_response_200 = Mock()
+            mock_response_200.status_code = 200
+            mock_response_200.content = b'file content'
+            mock_response_200.raise_for_status = Mock()
+
+            with patch.object(downloader, '_resilient_get', return_value=mock_response_200) as mock_get:
+                result = downloader._download_github_file(dep_ref, 'SKILL.md', 'main')
+                assert result == b'file content'
+
+                actual_headers = mock_get.call_args[1].get('headers') or mock_get.call_args[0][1]
+                assert actual_headers.get('Authorization') == 'token credential-token'
+
+            mock_cred.assert_called_once_with('github.com')
 
     def test_env_token_takes_priority_over_credential_fill(self):
         """GITHUB_APM_PAT should take priority over credential helpers."""

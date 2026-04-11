@@ -167,6 +167,39 @@ class TestBitbucketHTTPS:
         assert dep.repo_url == "acme/security-rules"
 
 
+class TestPlainHTTPGenericHosts:
+    """Test explicit http:// URL handling for generic hosts."""
+
+    def test_generic_http_url(self):
+        dep = DependencyReference.parse(
+            "http://git.company.internal/team/rules.git"
+        )
+        assert dep.host == "git.company.internal"
+        assert dep.repo_url == "team/rules"
+        assert dep.scheme == "http"
+
+    def test_generic_http_to_url_preserves_http(self):
+        dep = DependencyReference.parse(
+            "http://git.company.internal/team/rules.git"
+        )
+        assert dep.to_github_url() == "http://git.company.internal/team/rules"
+
+    def test_http_clone_url(self):
+        url = build_https_clone_url(
+            "git.company.internal", "team/rules", scheme="http"
+        )
+        assert url == "http://git.company.internal/team/rules"
+
+    def test_http_clone_url_rejects_token(self):
+        with pytest.raises(ValueError, match="https"):
+            build_https_clone_url(
+                "git.company.internal",
+                "team/rules",
+                token="plain-http-token",
+                scheme="http",
+            )
+
+
 class TestBitbucketSSH:
     """Test SSH git URL parsing for Bitbucket repositories."""
 

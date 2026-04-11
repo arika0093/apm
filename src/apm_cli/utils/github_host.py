@@ -155,15 +155,27 @@ def build_ssh_url(host: str, repo_ref: str) -> str:
     return f"git@{host}:{repo_ref}.git"
 
 
-def build_https_clone_url(host: str, repo_ref: str, token: Optional[str] = None) -> str:
-    """Build an HTTPS clone URL. If token provided, use x-access-token format (no escaping done).
+def build_https_clone_url(
+    host: str,
+    repo_ref: str,
+    token: Optional[str] = None,
+    scheme: str = "https",
+) -> str:
+    """Build an HTTP(S) clone URL.
+
+    If a token is provided, use x-access-token format (no escaping done).
+    Tokens are only allowed over HTTPS.
 
     Note: callers must avoid logging raw token-bearing URLs.
     """
+    if scheme not in ("https", "http"):
+        raise ValueError(f"Unsupported clone URL scheme: {scheme}")
+    if token and scheme != "https":
+        raise ValueError("Token-bearing clone URLs must use https")
     if token:
         # Use x-access-token format which is compatible with GitHub Enterprise and GH Actions
         return f"https://x-access-token:{token}@{host}/{repo_ref}.git"
-    return f"https://{host}/{repo_ref}"
+    return f"{scheme}://{host}/{repo_ref}"
 
 
 # Azure DevOps URL builders
@@ -336,12 +348,13 @@ def is_valid_fqdn(hostname: str) -> bool:
 def sanitize_token_url_in_message(message: str, host: Optional[str] = None) -> str:
     """Sanitize occurrences of token-bearing https URLs for the given host in message.
 
-    If host is None, default_host() is used. Replaces https://<anything>@host with https://***@host
+    If host is None, default_host() is used. Replaces http(s)://<anything>@host
+    with http(s)://***@host
     """
     if not host:
         host = default_host()
 
     # Escape host for regex
     host_re = re.escape(host)
-    pattern = rf"https://[^@\s]+@{host_re}"
-    return re.sub(pattern, f"https://***@{host}", message)
+    pattern = rf"https?://[^@\s]+@{host_re}"
+    return re.sub(pattern, lambda m: f"{m.group(0).split('://', 1)[0]}://***@{host}", message)
